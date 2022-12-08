@@ -54,6 +54,14 @@ namespace VRCOSC
             sender.Send(message);
         }
 
+        public void SendOSCTypingSignal(bool typing)
+        {
+            // /chatbox/typing b
+            var message = new SharpOSC.OscMessage("/chatbox/typing", typing);
+            var sender = new SharpOSC.UDPSender(vrcAddress, vrcPort);
+            sender.Send(message);
+        }
+
         private void ClearMessage()
         {
             ChatBox.Text = string.Empty;
@@ -62,6 +70,8 @@ namespace VRCOSC
         private void UpdateCharacterCount()
         {
             NumberLetter.Text = $"({ChatBox.Text.Length}/144)";
+
+            SendOSCTypingSignal(ChatBox.Text.Length > 0);
         }
 
         private void SendClick(object sender, RoutedEventArgs e)
