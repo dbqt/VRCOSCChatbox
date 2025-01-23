@@ -1,12 +1,9 @@
-﻿
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Concurrent;
 using System.ComponentModel;
-using System.Linq;
-using System.Net;
+using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Documents;
 using System.Windows.Input;
+using VRCOSC.Properties;
 
 namespace VRCOSC
 {
@@ -20,6 +17,23 @@ namespace VRCOSC
 
         private string currentText = string.Empty;
 
+        private SharpOSC.UDPSender? sender = null;
+
+        private ConcurrentStack<string> messageBuffer = new ConcurrentStack<string>();
+
+        private Task? currentMessageTask = null;
+
+        private SharpOSC.UDPSender Sender 
+        { 
+            get
+            {
+                if (sender == null)
+                {
+                    sender = new SharpOSC.UDPSender(vrcAddress, vrcPort);
+                }
+                return sender;
+            }
+        }
 
         public string CurrentText {
             get 
@@ -44,22 +58,30 @@ namespace VRCOSC
             InitializeComponent();
             DataContext = this;
             UpdateCharacterCount();
+            SendWhileTypingCheckBox.IsChecked = Settings.Default.SendWhileTyping;
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            SaveSettings();
+            base.OnClosing(e);
         }
 
         public void SendOSCMessage()
         {
-            // /chatbox/input s b
-            var message = new SharpOSC.OscMessage("/chatbox/input", CurrentText, true);
-            var sender = new SharpOSC.UDPSender(vrcAddress, vrcPort);
-            sender.Send(message);
+            QueueMessage();
         }
 
         public void SendOSCTypingSignal(bool typing)
         {
+            if (SendWhileTypingCheckBox.IsChecked.GetValueOrDefault())
+            {
+                QueueMessage();
+            }
+
             // /chatbox/typing b
             var message = new SharpOSC.OscMessage("/chatbox/typing", typing);
-            var sender = new SharpOSC.UDPSender(vrcAddress, vrcPort);
-            sender.Send(message);
+            Sender.Send(message);
         }
 
         private void ClearMessage()
@@ -72,6 +94,40 @@ namespace VRCOSC
             NumberLetter.Text = $"({ChatBox.Text.Length}/144)";
 
             SendOSCTypingSignal(ChatBox.Text.Length > 0);
+        }
+
+        private void QueueMessage()
+        {
+            messageBuffer.Push(CurrentText);
+
+            if (currentMessageTask == null)
+            {
+                currentMessageTask = Task.Run(async () =>
+                {
+                    // Keep sending while we have messages to process
+                    while (messageBuffer.Count > 0)
+                    {
+                        // Only process if we have messages
+                        if (messageBuffer.TryPop(out var result) && !string.IsNullOrWhiteSpace(result))
+                        {
+                            // Only clear if we have a non-empty message to avoid clearing prematurely
+                            messageBuffer.Clear();
+                            var message = new SharpOSC.OscMessage("/chatbox/input", result, true);
+                            Sender.Send(message);
+
+                            // Delay suggested by vrc
+                            await Task.Delay(1500);
+                        }
+                    }
+                    currentMessageTask = null;
+                });
+            }
+        }
+
+        private void SaveSettings()
+        {
+            Settings.Default.SendWhileTyping = SendWhileTypingCheckBox.IsChecked.GetValueOrDefault();
+            Settings.Default.Save();
         }
 
         private void SendClick(object sender, RoutedEventArgs e)
@@ -92,6 +148,11 @@ namespace VRCOSC
         private void TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
             UpdateCharacterCount();
+        }
+
+        private void SendWhileTypingCheckBoxChanged(object sender, RoutedEventArgs e)
+        {
+            SaveSettings();
         }
     }
 }
